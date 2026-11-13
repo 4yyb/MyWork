@@ -7,8 +7,6 @@ import socket
 import subprocess
 import time
 import uuid
-import hmac
-import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -16,14 +14,14 @@ from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string
 
 from PySide6.QtCore import Qt, QTimer, QRect, QSize
-from PySide6.QtGui import QColor, QFont, QFontMetrics
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
     QMessageBox, QHeaderView, QDialog, QFormLayout, QSpinBox,
     QComboBox, QCheckBox, QGroupBox, QScrollArea, QInputDialog, QFileDialog,
     QTabWidget, QSplitter, QListWidget, QListWidgetItem, QStackedWidget, QToolButton,
-    QFrame, QSizePolicy, QStyledItemDelegate, QStyle, QMenu
+    QFrame, QSizePolicy, QStyledItemDelegate, QStyle, QMenu, QWidgetAction
 )
 
 # ---------------------------------------------------------------------------
@@ -41,6 +39,12 @@ def get_app_dir():
         return Path(sys.argv[0]).resolve().parent
     return Path(__file__).resolve().parent
 
+
+# ---------------------------------------------------------------------------
+# PASSWORD: ubah dua tulisan di bawah ini jika ingin mengganti password.
+# ---------------------------------------------------------------------------
+PASSWORD_TAMBAH_OPERATOR = "1234"       # membuka menu Tambah Operator
+PASSWORD_EDIT_PROGRAM = "checkerPE1234"  # membuka Edit Program
 
 APP_DIR = get_app_dir()
 CONFIG_FILE = APP_DIR / "config.json"
@@ -145,19 +149,6 @@ def safe_file_stem(stem, folder, extension, default="hasil_pengujian"):
     except (OSError, ValueError, RuntimeError):
         stem = default
     return stem + extension
-
-
-# Hash password (PBKDF2-SHA256, salt tetap di kode); password yang diterima tidak berubah.
-_PW_SALT = b"PE-Checker-v2/pw-salt"
-_PW_HASHES = {
-    "operator": bytes.fromhex("8b3f3e40f4dac7846e80480cb1e8a6dab230ae68eda6f83d4bea0ce587723630"),
-    "edit": bytes.fromhex("84ad3f2ba1c8f692a9d5feee62a5d925de744762c9291ad5a55a735d5e4c761f"),
-}
-
-
-def password_ok(kind, typed):
-    digest = hashlib.pbkdf2_hmac("sha256", str(typed).encode("utf-8"), _PW_SALT, 200000)
-    return hmac.compare_digest(digest, _PW_HASHES[kind])
 
 
 def resolve_operators_path(value):
@@ -1303,6 +1294,7 @@ class EditProgramDialog(QDialog):
             self._undo_time = now  # lanjutan perubahan yang sama: tetap satu langkah undo
             return
         self._undo = {"steps": json.loads(json.dumps(self.steps)), "csv": self._csv_live_state(),
+                      "targets": self._live_targets(), "tab": self.targets_tabs.currentIndex(),
                       "current": self._current}
         self._undo_tag, self._undo_time = tag, now
         self.undo_button.setEnabled(True)
@@ -1317,6 +1309,8 @@ class EditProgramDialog(QDialog):
         self.undo_button.setEnabled(False)
         self.steps = snap["steps"]
         self._current = max(0, min(snap["current"], len(self.steps) - 1))
+        if json.dumps(self._live_targets(), sort_keys=True) != json.dumps(snap["targets"], sort_keys=True):
+            self._set_targets(snap["targets"], select=snap["tab"])
         self._after_structure(self._current, state=snap["csv"])
         self.toast("Aksi terakhir diurungkan.")
 
@@ -1365,37 +1359,50 @@ class EditProgramDialog(QDialog):
         ll.addWidget(self.step_filter)
         ll.addWidget(self.step_list, 1)
         row = QHBoxLayout()
-        row.setSpacing(6)
+        row.setSpacing(4)
         buttons = {}
         for name, text, tip, handler in (
                 ("add", "+ Tambah", "Tambah step di akhir", self.add_step),
-                ("dup", "Duplikat", "Gandakan step terpilih", self.duplicate_step),
-                ("up", "▲", "Geser ke atas", lambda: self.move_step(-1)),
-                ("down", "▼", "Geser ke bawah", lambda: self.move_step(1))):
+                ("dup", "Duplikat", "Gandakan step terpilih (Ctrl+D)", self.duplicate_step),
+                ("copy", "Salin", "Salin konfigurasi step terpilih (Ctrl+C)", self.copy_step),
+                ("paste", "Tempel", "Tempel konfigurasi yang disalin ke step terpilih (Ctrl+V)", self.paste_step)):
             button = Button(text)
             button.setToolTip(tip)
+            button.setStyleSheet("padding: 4px 8px;")
             button.clicked.connect(lambda _=False, h=handler: h())
-            row.addWidget(button, 1 if name in ("add", "dup") else 0)
+            row.addWidget(button, 1)
             buttons[name] = button
+        buttons["paste"].setEnabled(False)
         self.step_buttons = buttons
         more = QToolButton()
         more.setObjectName("more")
         more.setText("⋯")
-        more.setToolTip("Salin, tempel, hapus, alat cepat")
+        more.setToolTip("Hapus step, alat cepat")
         more.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(more)
-        self.step_actions = {
-            "copy": menu.addAction("Salin konfigurasi step ini", self.copy_step),
-            "paste": menu.addAction("Tempel konfigurasi ke step ini", self.paste_step),
-        }
+        self._del_button = Button("Hapus step ini  (Delete)")
+        self._del_button.setFlat(True)
+        self._del_button.setStyleSheet("QPushButton { color: #B42318; border: none; text-align: left; padding: 6px 26px; background: transparent; }"
+                                       "QPushButton:hover { background: #FDECEA; } QPushButton:disabled { color: #9CA3AF; }")
+        del_action = QWidgetAction(menu)
+        del_action.setDefaultWidget(self._del_button)
+        menu.addAction(del_action)
+        self._del_button.clicked.connect(lambda: (menu.close(), self.delete_step()))
         menu.addSeparator()
-        self.step_actions["del"] = menu.addAction("Hapus step ini", self.delete_step)
-        menu.addSeparator()
-        self.step_actions["tools"] = menu.addAction("Alat cepat: perintah copy step…", self.show_command_tool)
-        self.step_actions["paste"].setEnabled(False)
+        tools_action = menu.addAction("Alat cepat: perintah copy step…", self.show_command_tool)
+        self.step_actions = {"del": del_action, "tools": tools_action}
         more.setMenu(menu)
         row.addWidget(more)
         ll.addLayout(row)
+        # Pintasan hanya saat daftar step terfokus (tidak menimpa Ctrl+C/V di kolom isian).
+        self._step_shortcuts = []
+        for keys, handler in (("Ctrl+C", self.copy_step), ("Ctrl+V", self.paste_step),
+                              ("Ctrl+D", self.duplicate_step), ("Delete", self.delete_step)):
+            shortcut = QShortcut(QKeySequence(keys), self.step_list)
+            shortcut.setContext(Qt.WidgetShortcut)
+            shortcut.setAutoRepeat(False)  # menahan tombol tidak mengulang aksi (hapus/duplikat massal)
+            shortcut.activated.connect(handler)
+            self._step_shortcuts.append(shortcut)
         self.command_fold = Fold("Alat cepat: perintah copy step")
         cbody = QWidget()
         cl = QVBoxLayout(cbody)
@@ -1431,8 +1438,8 @@ class EditProgramDialog(QDialog):
         split.addWidget(right)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([340, 800])
-        left.setMinimumWidth(280)
+        split.setSizes([380, 780])
+        left.setMinimumWidth(340)
         outer.addWidget(split, 1)
         self.stack.addWidget(page)
         self.step_search.textChanged.connect(self._apply_filter)
@@ -1449,10 +1456,8 @@ class EditProgramDialog(QDialog):
         self.editor_title.setText(f"Step {self._current + 1} — {step['name_before'].strip() or '(tanpa nama)'}")
 
     def _update_step_buttons(self):
-        self.step_buttons["up"].setEnabled(self._current > 0)
-        self.step_buttons["down"].setEnabled(self._current < len(self.steps) - 1)
-        self.step_actions["del"].setEnabled(len(self.steps) > 1)
-        self.step_actions["paste"].setEnabled(self._copied is not None)
+        self._del_button.setEnabled(len(self.steps) > 1)
+        self.step_buttons["paste"].setEnabled(self._copied is not None)
 
     def _step_info(self, i, bad):
         step = self.steps[i]
@@ -1602,23 +1607,13 @@ class EditProgramDialog(QDialog):
         removed = self._after_structure(min(self._current, len(self.steps) - 1), before)
         text = f"Step {number} dihapus"
         if removed:
-            text += ". " + "; ".join(f"Pilihan CSV untuk Step {n} dihapus" for n in removed)
+            text += ". " + self._removed_text(removed)
         self.toast(text + ". Klik Urungkan perubahan untuk membatalkan (selama belum mengedit isian).", bad=bool(removed))
-
-    def move_step(self, delta):
-        target = self._current + delta
-        if target < 0 or target >= len(self.steps):
-            return
-        before = self.csv_maps()
-        self.push_undo()
-        self.steps[self._current], self.steps[target] = self.steps[target], self.steps[self._current]
-        self._after_structure(target, before)
-        self.toast(f"Step dipindah ke posisi {target + 1}; pilihan CSV ikut berpindah.")
 
     def copy_step(self):
         self._copied = json.loads(json.dumps(self.steps[self._current]))
-        self.step_actions["paste"].setEnabled(True)
-        self.toast(f"Konfigurasi Step {self._current + 1} disalin. Pilih step tujuan lalu Tempel (menu ⋯).")
+        self.step_buttons["paste"].setEnabled(True)
+        self.toast(f"Konfigurasi Step {self._current + 1} disalin. Pilih step tujuan lalu klik Tempel.")
 
     def paste_step(self):
         if not self._copied:
@@ -1629,8 +1624,15 @@ class EditProgramDialog(QDialog):
         new = json.loads(json.dumps(self._copied))
         new["_id"] = self.steps[self._current]["_id"]  # slot yang sama: pilihan CSV tetap menunjuk slot ini
         self.steps[self._current] = new
-        self._after_structure(self._current, before)
-        self.toast(f"Konfigurasi ditempel ke Step {self._current + 1}.")
+        removed = self._after_structure(self._current, before)
+        text = f"Konfigurasi ditempel ke Step {self._current + 1}."
+        if removed:
+            text += " " + self._removed_text(removed) + "."
+        self.toast(text, bad=bool(removed))
+
+    @staticmethod
+    def _removed_text(removed):
+        return "; ".join(f"Pilihan CSV untuk Step {n} dihapus" for n in removed)
 
     def execute_step_command(self):
         """Perintah copy step (perilaku sama dengan versi lama), tanpa pop-up."""
@@ -1656,18 +1658,27 @@ class EditProgramDialog(QDialog):
         if last_target < first_target:
             self.toast("Nomor tujuan akhir harus lebih besar atau sama dengan tujuan awal.", bad=True)
             return
+        def plain(step):
+            return json.dumps({k: v for k, v in step.items() if k != "_id"}, sort_keys=True)
+        source_config = json.loads(json.dumps(self.steps[source - 1]))
+        if all(plain(self.steps[n - 1]) == plain(source_config) for n in range(first_target, last_target + 1)):
+            self.step_command_input.clear()
+            self.toast("Tidak ada perubahan: step tujuan sudah sama dengan Step %d." % source)
+            return
         before = self.csv_maps()
         self.push_undo()
-        source_config = json.loads(json.dumps(self.steps[source - 1]))
         for number in range(first_target, last_target + 1):
             new = json.loads(json.dumps(source_config))
             new["_id"] = self.steps[number - 1]["_id"]
             self.steps[number - 1] = new
         self.step_command_input.clear()
-        self._after_structure(self._current, before)
+        removed = self._after_structure(self._current, before)
         count = last_target - first_target + 1
-        self.toast(f"Step {source} disalin ke Step {first_target}"
-                   + (f" sampai {last_target}" if last_target != first_target else "") + f" ({count} step).")
+        text = (f"Step {source} disalin ke Step {first_target}"
+                + (f" sampai {last_target}" if last_target != first_target else "") + f" ({count} step).")
+        if removed:
+            text += " " + self._removed_text(removed) + "."
+        self.toast(text, bad=bool(removed))
 
     # ------------------------------------------------------------------ halaman CSV
     def column_options(self):
@@ -1727,6 +1738,47 @@ class EditProgramDialog(QDialog):
         top.addWidget(self.target_count)
         top.addStretch()
         bl.addLayout(top)
+        tools = QHBoxLayout()
+        tools.setSpacing(6)
+        tools.addWidget(QLabel("Pengaturan file aktif:"))
+        self.csv_buttons = {}
+        for name, text, tip, handler in (
+                ("dup", "Duplikat", "Buat file tujuan baru di akhir berisi salinan pengaturan file yang sedang aktif", self.duplicate_target),
+                ("copy", "Salin", "Salin pengaturan file yang sedang aktif", self.copy_target),
+                ("paste", "Tempel", "Timpa pengaturan file aktif dengan hasil Salin", self.paste_target)):
+            button = Button(text)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _=False, h=handler: h())
+            tools.addWidget(button)
+            self.csv_buttons[name] = button
+        self.csv_buttons["paste"].setEnabled(False)
+        tools.addStretch()
+        bl.addLayout(tools)
+        self.csv_cmd_fold = Fold("Alat cepat: perintah copy file")
+        cmd_body = QWidget()
+        cmd_layout = QVBoxLayout(cmd_body)
+        cmd_help = QLabel("Contoh: copy file 1 to file 2-5  |  copy file 1 for file 2 to 5  |  copy file 1 to file 3  |  copy 1 to 2-5\n"
+                          "Rentang tujuan inklusif; jumlah file tidak berubah.")
+        cmd_help.setObjectName("hint")
+        cmd_help.setWordWrap(True)
+        self.csv_cmd_input = QLineEdit()
+        self.csv_cmd_input.setPlaceholderText("copy file 1 to file 2-5")
+        self.csv_cmd_button = Button("Jalankan")
+        cmd_row = QHBoxLayout()
+        cmd_row.addWidget(self.csv_cmd_input, 1)
+        cmd_row.addWidget(self.csv_cmd_button)
+        self.csv_cmd_status = QLabel()
+        self.csv_cmd_status.setObjectName("err")
+        self.csv_cmd_status.setWordWrap(True)
+        self.csv_cmd_status.hide()
+        cmd_layout.addWidget(cmd_help)
+        cmd_layout.addLayout(cmd_row)
+        cmd_layout.addWidget(self.csv_cmd_status)
+        self.csv_cmd_fold.set_builder(lambda: cmd_body)
+        self.csv_cmd_button.clicked.connect(self.execute_target_command)
+        self.csv_cmd_input.returnPressed.connect(self.execute_target_command)
+        bl.addWidget(self.csv_cmd_fold)
+        self._target_clip = None
         self.targets_tabs = QTabWidget()
         self.targets_tabs.setMinimumHeight(400)
         bl.addWidget(self.targets_tabs)
@@ -1795,8 +1847,8 @@ class EditProgramDialog(QDialog):
                                 "data1": old.get("filename_data1", "") or "", "data2": old.get("filename_data2", "") or ""})
         return {"targets": targets, "names": {k: f.text() for k, f in self.column_names.items()}}
 
-    def rebuild_targets(self, *_args, initial=False):
-        old_targets = self._live_targets()
+    def rebuild_targets(self, *_args, initial=False, targets=None, quiet=False):
+        old_targets = targets if targets is not None else self._live_targets()
         if not old_targets:
             old_targets = [dict(item) for item in self.saved_targets]
             for item in old_targets:
@@ -1816,8 +1868,134 @@ class EditProgramDialog(QDialog):
             self._make_target(index, old)
         self._sync_csv_options()
         if not initial:
-            self.mark_edited()
+            if not quiet:
+                self.mark_edited()
             self.schedule_validate()
+
+    # ---- salin/duplikat/tempel/perintah copy antar file tujuan
+    _TARGET_CMD = re.compile(
+        r"^copy\s+(?:file\s*)?(\d+)\s+(?:for\s+(?:file\s*)?|to\s+(?:file\s*)?)(\d+)"
+        r"(?:\s+to\s+(?:file\s*)?(\d+)|\s*-\s*(?:file\s*)?(\d+))?$", re.IGNORECASE)
+
+    def _set_targets(self, targets, select=None):
+        """Ganti seluruh file tujuan dengan daftar ini (tanpa menandai sebagai edit isian)."""
+        self.target_count.blockSignals(True)
+        self.target_count.setValue(len(targets))
+        self.target_count.blockSignals(False)
+        self.rebuild_targets(targets=targets, quiet=True)
+        if select is not None:
+            self.targets_tabs.setCurrentIndex(max(0, min(select, len(targets) - 1)))
+        self.validate_now()
+
+    def duplicate_target(self):
+        live = self._live_targets()
+        cur = self.targets_tabs.currentIndex()
+        if len(live) >= 1000:
+            self.toast("Maksimal 1000 file tujuan.", bad=True)
+            return
+        self.push_undo()
+        new = json.loads(json.dumps(live[cur]))
+        # Akhiran unik pada teks nama file supaya salinan tidak menulis ke file yang sama dengan asalnya.
+        base, number = new["filename_text"], 2
+        while self._target_key(dict(new, filename_text=f"{base}_{number}")) in {self._target_key(t) for t in live}:
+            number += 1
+        new["filename_text"] = new["filename"] = f"{base}_{number}"
+        live.append(new)
+        self._set_targets(live, select=len(live) - 1)
+        self.toast(f"File {len(live)} dibuat dari File {cur + 1}, cek folder dan nama file")
+
+    @staticmethod
+    def _target_key(t):
+        """Identitas file keluaran sebuah target: folder + bagian nama file (tanpa membedakan huruf besar/kecil)."""
+        folder = os.path.normcase(os.path.normpath(str(Path(t["destination"]).expanduser()))).lower()
+        parts = []
+        for n in (1, 2):
+            kind = t.get(f"filename_part{n}")
+            parts.append((kind, (t.get(f"filename_data{n}") or "") if kind == "data" else ""))
+        return (folder, tuple(parts), t["filename_text"].strip().lower())
+
+    def _same_file_warning(self):
+        groups = {}
+        for index, t in enumerate(self._live_targets(), start=1):
+            groups.setdefault(self._target_key(t), []).append(index)
+        notes = []
+        for members in groups.values():
+            if len(members) > 1:
+                names = (" dan ".join(f"File {i}" for i in members) if len(members) == 2 else
+                         "File " + ", ".join(str(i) for i in members[:-1]) + f" dan {members[-1]}")
+                notes.append(f"{names} menulis ke file yang sama")
+        return "; ".join(notes)
+
+    def copy_target(self):
+        cur = self.targets_tabs.currentIndex()
+        self._target_clip = {"data": json.loads(json.dumps(self._live_targets()[cur])),
+                             "maps": self.csv_maps(), "from": cur + 1}
+        self.csv_buttons["paste"].setEnabled(True)
+        self.toast(f"Pengaturan File {cur + 1} disalin. Pilih file tujuan lalu klik Tempel.")
+
+    def _remap_target(self, entry, maps):
+        """Petakan kolom + data nama file yang tersalin (nomor step saat disalin) ke nomor step sekarang."""
+        state, _ = CsvRemap(maps, self.csv_maps()).apply({"targets": [{
+            "columns": [k for k in entry["columns"] if isinstance(k, str)],
+            "data1": entry.get("filename_data1") or "", "data2": entry.get("filename_data2") or ""}], "names": {}})
+        new = json.loads(json.dumps(entry))
+        new["columns"], new["filename_data1"], new["filename_data2"] = (
+            state["targets"][0]["columns"], state["targets"][0]["data1"], state["targets"][0]["data2"])
+        return new
+
+    def paste_target(self):
+        clip = self._target_clip
+        if not clip:
+            self.toast("Belum ada pengaturan yang disalin. Klik Salin pada file sumber dulu.", bad=True)
+            return
+        cur = self.targets_tabs.currentIndex()
+        live = self._live_targets()
+        self.push_undo()
+        live[cur] = self._remap_target(clip["data"], clip["maps"])
+        self._set_targets(live, select=cur)
+        self.toast(f"Pengaturan File {clip['from']} ditempel ke File {cur + 1}.")
+
+    def _csv_cmd_message(self, text, bad):
+        """bad: True = kesalahan (merah), False = berhasil (hijau), "warn" = berhasil dengan peringatan (oranye)."""
+        color = "#B45309" if bad == "warn" else ("#B42318" if bad else "#14532D")
+        self.csv_cmd_status.setStyleSheet(f"color:{color};")
+        self.csv_cmd_status.setText(text)
+        self.csv_cmd_status.setVisible(bool(text))
+
+    def execute_target_command(self):
+        """Perintah copy antar file tujuan; kesalahan ditampilkan inline di panel."""
+        match = self._TARGET_CMD.match(self.csv_cmd_input.text().strip())
+        if not match:
+            self._csv_cmd_message("Format tidak dikenali. Contoh: copy file 1 to file 2-5  |  copy 1 to 2-5", True)
+            self.csv_cmd_input.setFocus()
+            return
+        source = int(match.group(1))
+        first = int(match.group(2))
+        last = int(match.group(3) or match.group(4) or first)
+        total = self.target_count.value()
+        if source < 1 or source > total or first < 1 or last < 1 or last > total:
+            self._csv_cmd_message(f"Nomor file harus berada antara 1 sampai {total}.", True)
+            return
+        if last < first:
+            self._csv_cmd_message("Nomor tujuan akhir harus lebih besar atau sama dengan tujuan awal.", True)
+            return
+        if first <= source <= last:
+            self._csv_cmd_message("Sumber tidak boleh termasuk tujuan.", True)
+            return
+        live = self._live_targets()
+        self.push_undo()
+        base = live[source - 1]
+        for number in range(first, last + 1):
+            live[number - 1] = json.loads(json.dumps(base))  # salinan mandiri
+        self._set_targets(live, select=self.targets_tabs.currentIndex())
+        self.csv_cmd_input.clear()
+        text = f"File {source} disalin ke File {first}" + (f" sampai {last}" if last != first else "") + f" ({last - first + 1} file)."
+        warning = self._same_file_warning()
+        if warning:
+            self._csv_cmd_message(text + "\nPeringatan: " + warning + ". Ubah folder atau teks nama file agar tiap file berbeda.", "warn")
+        else:
+            self._csv_cmd_message(text, False)
+        self.toast(text)
 
     def _make_target(self, index, old):
         tab = QWidget()
@@ -2206,6 +2384,10 @@ class EditProgramDialog(QDialog):
             base = ("Step", "Penyimpanan CSV", "File .dat")[row]
             item.setText(base + (f"   ({counts[section]} masalah)" if counts[section] else ""))
             item.setForeground(QColor("#FCA5A5") if counts[section] else QColor("#E5E7EB"))
+        bad_targets = {k[1] for k in self.issues if k[0] == "csv" and k[1] != "*"}
+        for i in range(self.targets_tabs.count()):
+            self.targets_tabs.setTabText(i, f"File {i + 1}" + ("  !" if i in bad_targets else ""))
+            self.targets_tabs.setTabToolTip(i, "Ada isian yang perlu diperbaiki" if i in bad_targets else "")
         bad = self._bad_steps()
         for i in range(self.step_list.count()):
             item = self.step_list.item(i)
@@ -3298,7 +3480,7 @@ class BarcodeApp(QMainWindow):
         )
         if not accepted:
             return
-        if not password_ok("operator", password):
+        if password != PASSWORD_TAMBAH_OPERATOR:
             QMessageBox.warning(self, "Password salah", "Password tidak sesuai. Menu Tambah Operator tidak dibuka.")
             return
         path = resolve_operators_path(self.config.get("operators_file", ""))
@@ -3330,7 +3512,7 @@ class BarcodeApp(QMainWindow):
         )
         if not accepted:
             return
-        if not password_ok("edit", password):
+        if password != PASSWORD_EDIT_PROGRAM:
             QMessageBox.warning(self, "Password salah", "Password tidak sesuai. Edit Program tidak dibuka.")
             return
         dialog = EditProgramDialog(self.config, self)

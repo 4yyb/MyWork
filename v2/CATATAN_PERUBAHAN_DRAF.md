@@ -12,7 +12,8 @@ Bukti semua item: dari laporan Dev/Reviewer (dites di wine, 73 tes lulus).
 
 - **Navigasi samping baru di editor Program.** Menu samping berisi: Step, Penyimpanan CSV, File .dat, Umum.
 - **Daftar step di kiri dengan editor di kanan.** Daftar step bisa dicari, difilter per jenis step, dan difilter "yang bermasalah" (step yang punya kesalahan). Editor kanan hanya menampilkan step yang dipilih — lebih cepat untuk Program 40–70+ step.
-- **Aksi pada daftar step:** Tambah, Duplikat, Geser atas, Geser bawah, menu ⋯ (Salin, Tempel, Hapus, Alat cepat), dan Urungkan perubahan. Perintah lama "copy step 2 for step 3 to 73" tetap ada, sekarang di menu Alat cepat.
+- **Aksi pada daftar step:** tombol langsung [+ Tambah] [Duplikat] [Salin] [Tempel], menu ⋯ (Hapus, Alat cepat), dan Urungkan perubahan. Tombol geser atas/bawah dihapus. Pintasan keyboard saat daftar step terfokus: Ctrl+C Salin, Ctrl+V Tempel, Ctrl+D Duplikat, Delete Hapus (tidak berulang otomatis saat tombol ditahan). Perintah lama "copy step 2 for step 3 to 73" tetap ada di panel Alat cepat.
+- **Penyimpanan CSV: salin pengaturan antar file tujuan cepat.** Tombol Duplikat (file baru berisi salinan file aktif, nama file diberi akhiran _2, _3, ... agar tidak bentrok), Salin, Tempel, dan panel "Alat cepat" untuk perintah seperti "copy file 1 to file 2-5", "copy file 1 for file 2 to 5", "copy 1 to 2-5". Perintah dengan sumber di dalam tujuan ditolak. Jika dua file tujuan menulis ke file yang sama, muncul peringatan (Simpan tetap bisa).
 - **Tiap Data tampil sebagai kartu yang bisa dilipat.** Tiga validasi (Excel, Karakter, Unik) masing-masing bisa dilipat, punya saklar Aktif, dan ringkasan satu baris. Chip E/K/U di daftar step menandai validasi yang aktif.
 - **Error tampil langsung di bawah isian**, bukan sebagai pop-up. Tombol Simpan nonaktif selama masih ada isian yang salah. Ada tautan "Ke masalah pertama ›" di bar bawah, dan lencana jumlah masalah di menu samping.
 - **Penyimpanan CSV diperbarui:** pratinjau nama file langsung, daftar kolom dengan kotak cari serta tombol Pilih semua/Kosongkan, dan "Isi tetap" untuk Lini dan Hasil Tes.
@@ -38,7 +39,7 @@ Bukti: dari laporan Dev/Reviewer.
 
 - Format file **config.json, session.json, operators.json** — tidak diubah.
 - **Hasil scan, validasi, isi CSV, dan isi .dat** — tidak berubah.
-- **Password** — tidak berubah. Password disimpan sebagai hash secara internal, tetapi password yang dipakai TETAP SAMA seperti sebelumnya.
+- **Password** — tidak berubah, tetap tertulis langsung di kode seperti versi lama: `PASSWORD_TAMBAH_OPERATOR = "1234"` dan `PASSWORD_EDIT_PROGRAM = "checkerPE1234"` (dua baris di dekat bagian atas file, mudah diganti).
 - **Link IP** — tidak berubah.
 - **File lama bisa langsung dipakai:** letakkan config.json, session.json, dan operators.json lama di folder yang sama dengan PE_Checker_v2.exe.
 
@@ -60,14 +61,14 @@ Bukti: dari laporan Dev/Reviewer.
 
 ## Perlu dikonfirmasi sebelum rilis
 
-Keputusan berikut belum diambil user. Jangan dianggap sudah selesai. Bukti: dari laporan Dev/Reviewer.
+Keputusan keamanan berikut sudah diputuskan user: tidak perlu (program berjalan offline dan tidak krusial; password sengaja di-hardcode).
 
 | # | Hal yang perlu diputuskan | Status |
 |---|---|---|
-| 1 | Netralisasi formula CSV untuk barcode berawalan `=`, `+`, `@` | Belum diputuskan |
-| 2 | Mengganti password "1234", menambah lockout, dan password untuk Reset Total | Belum diputuskan |
-| 3 | Tanda tangan (signature) file config.json | Belum diputuskan |
-| 4 | Kunci file CSV antar-PC | Belum diputuskan |
+| 1 | Netralisasi formula CSV untuk barcode berawalan `=`, `+`, `@` | Diputuskan user: tidak diubah |
+| 2 | Mengganti password "1234", menambah lockout, dan password untuk Reset Total | Diputuskan user: tidak diubah |
+| 3 | Tanda tangan (signature) file config.json | Diputuskan user: tidak diubah |
+| 4 | Kunci file CSV antar-PC | Diputuskan user: tidak diubah |
 
 ## Belum diuji
 
